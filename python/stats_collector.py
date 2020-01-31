@@ -339,7 +339,8 @@ class Test():
         status = []
         stats = []
         tstamps = []
-        sleep(2)  # wait for test to be fully running before start colleting stats
+        sleep(10)  # wait for test to be fully running before start colleting
+        # stats
         while times >= 0:
             status1 = {}
             stats1 = {}
@@ -846,11 +847,81 @@ def test_throughput2():
 
     return [test_thr_cl1, test_thr_cl2], start_memory, out_folder, localenv
 
+def test_tcp_single_client():
+    """Configures a test that fulfill the 100Gb/s nic"""
+    localenv = Warp17Env('ut/ini/{}.ini'.format(socket.gethostname()))
+
+    test_thr_cl1 = Test(type=TestCaseType.Value('CLIENT'), port=0, id=0)
+    test_thr_cl1.cl_port = 0
+    test_thr_cl1.sr_port = 1
+    test_thr_cl1.add_l3(test_thr_cl1.cl_port, 167837697, 4)  # 10.1.0.1
+    test_thr_cl1.add_l3(test_thr_cl1.sr_port, 167772161, 1)  # 10.0.0.1-10.0.0.10
+    test_thr_cl1.l4_config[test_thr_cl1.cl_port] = 200
+    test_thr_cl1.l4_config[test_thr_cl1.sr_port] = 50000  # not really needed
+    test_thr_cl1.proto = TCP
+    test_thr_cl1.mtu = 2854
+    test_thr_cl1.tcpwin = 2560
+
+    test_thr_cl1.cl_test_criteria = TestCriteria(tc_crit_type=RUN_TIME,
+                                                 tc_cl_estab=120)
+
+    test_thr_cl1.app_ccfg = App(app_proto=RAW_CLIENT,
+                                app_raw_client=RawClient(rc_req_plen=2560,
+                                                         rc_resp_plen=2560))
+    test_thr_cl1.tc_init_delay = Delay(d_value=0)
+    test_thr_cl1.tc_uptime = Delay(d_value=1)
+    test_thr_cl1.tc_downtime = Delay(d_value=0)
+
+    start_memory = env.get_memory()
+
+    localenv.set_value(env.TCB_POOL_SZ, 0)
+    localenv.set_value(env.UCB_POOL_SZ, 95000)
+
+    out_folder = "/tmp/{}-test-{}/".format(test_throughput2.__name__,
+                                           get_uniq_stamp())
+
+    return [test_thr_cl1], start_memory, out_folder, localenv
+
+
+def test_tcp_single_server():
+    """Configures a test that fulfill the 100Gb/s nic"""
+    localenv = Warp17Env('ut/ini/{}.ini'.format(socket.gethostname()))
+
+    test_thr_cl1 = Test(type=TestCaseType.Value('SERVER'), port=0, id=0)
+    test_thr_cl1.sr_port = 0
+    test_thr_cl1.add_l3(test_thr_cl1.sr_port, 167772161, 1)  # 10.0.0.1-10.0.0.10
+    test_thr_cl1.l4_config[test_thr_cl1.sr_port] = 50000  # not really needed
+    test_thr_cl1.proto = TCP
+    test_thr_cl1.mtu = 2854
+    test_thr_cl1.tcpwin = 2560
+
+    test_thr_cl1.cl_test_criteria = TestCriteria(tc_crit_type=RUN_TIME,
+                                                 tc_cl_estab=120)
+
+    test_thr_cl1.app_ccfg = App(app_proto=RAW_CLIENT,
+                                app_raw_client=RawClient(rc_req_plen=2560,
+                                                         rc_resp_plen=2560))
+    test_thr_cl1.tc_init_delay = Delay(d_value=0)
+    test_thr_cl1.tc_uptime = Delay(d_value=1)
+    test_thr_cl1.tc_downtime = Delay(d_value=0)
+
+    start_memory = env.get_memory()
+
+    localenv.set_value(env.TCB_POOL_SZ, 0)
+    localenv.set_value(env.UCB_POOL_SZ, 95000)
+
+    out_folder = "/tmp/{}-test-{}/".format(test_throughput2.__name__,
+                                           get_uniq_stamp())
+
+    return [test_thr_cl1], start_memory, out_folder, localenv
+
 
 tests = []  # here you can append the tests you want to run (in sequence)
 # tests.append(test_http_throughput())
-tests.append(test_tcp4_throughput())
-tests.append(test_udp_throughput())
+# tests.append(test_tcp4_throughput())
+# tests.append(test_udp_throughput())
+# tests.append(test_tcp_single_server())
+# tests.append(test_tcp_single_client())
 
 for test, start_memory, out_folder, localenv in tests:
     res_file = "{}res.txt".format(out_folder)
