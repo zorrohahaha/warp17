@@ -320,8 +320,6 @@ class Test():
                     raise BaseException(
                         'ERROR {} configuring tcp option {}'.format(
                             answer.e_code, sockopt_arg))
-
-
         else:
             raise BaseException("ERROR: test type is invalid")
 
@@ -333,7 +331,7 @@ class Test():
                 -long(errno.EEXIST):
             # print("ERROR {}: trying to reconfigure".format(answer.e_code))
             # TODO: clean all the possible testcases
-            warp17_call('PortStop', PortArg(pa_eth_port=[port]))
+            warp17_call('PortStop', PortArg(pa_eth_port=port))
             warp17_call('DelTestCase', cfg)
             answer = warp17_call('ConfigureTestCase', cfg)
         if answer.e_code is not 0:
@@ -370,8 +368,7 @@ class Test():
         for port in self.l3_config:
             answer = warp17_call('PortStop', PortArg(pa_eth_port=port))
             if answer.e_code is not 0:
-                raise BaseException("ERROR {} starting testcases on port {}"
-                                    "".format(answer.e_code, port))
+                print("ERROR {} stopping testcases on port {}".format(answer.e_code, port))
 
     # DEBUG function that tries to get the testcase and prints it
     #   ATTENTION: use it only after you configured the testcases
@@ -385,12 +382,18 @@ class Test():
                     "".format(answer.tcr_error.e_code, port))
             print(answer.tcr_cfg)
 
-    def start(self):
-        for port in self.l3_config:
+    def start(self, port=None):
+        if port is not None and type(port) is int:
             answer = warp17_call('PortStart', PortArg(pa_eth_port=port))
             if answer.e_code is not 0:
-                raise BaseException("ERROR {} starting testcases on port {}"
+                raise BaseException("ERROR {} stopping testcases on port {}"
                                     "".format(answer.e_code, port))
+        else:
+            for port in self.l3_config:
+                answer = warp17_call('PortStart', PortArg(pa_eth_port=port))
+                if answer.e_code is not 0:
+                    raise BaseException("ERROR {} starting testcases on port {}"
+                                        "".format(answer.e_code, port))
 
     @staticmethod
     def passed(results):
@@ -461,6 +464,10 @@ def collect_stats(logwriter, localenv, test_list):
     try:
         warp17_wait(localenv)
 
+    except BaseException as E:
+        print("ERROR {} starting warp17".format(E))
+        warp17_stop(localenv, proc)
+
         n_samples = 20
         sample = 0
         status = []
@@ -468,11 +475,11 @@ def collect_stats(logwriter, localenv, test_list):
         tstamps = []
         for test in test_list:
             test.add_config()
-            # test.check_test() # use to debug only
+            # test.check_test()  # use to debug only
             test.start()
 
-        sleep(15) # wait for test to be fully running
-                  #     (http tests take a lot of time)
+        sleep(15)   # wait for test to be fully running
+                    #  (http tests take a lot of time)
         init_tstamp = time.time()
         while sample <= n_samples:
             status1 = {}
@@ -517,9 +524,6 @@ def collect_stats(logwriter, localenv, test_list):
             logwriter.write(message)
             i += 1
 
-    except BaseException as E:
-        print("Error occurred: {}".format(E))
-        warp17_stop(localenv, proc)
 
     return
 
@@ -530,72 +534,71 @@ def wait_collect_stats(logwriter, localenv, test_list):
     try:
         warp17_wait(localenv)
 
-        n_samples = 20
-        sample = 0
-        status = []
-        stats = []
-        tstamps = []
-        for test in test_list:
-            test.add_config()
-            # test.check_test() # use to debug only
-            test.start()
-
-        sleep(60)  # wait for test to be fully running
-        #     (http tests take a lot of time)
-        init_tstamp = time.time()
-        while sample <= n_samples:
-            status1 = {}
-            stats1 = {}
-            for port in (0, 1):
-                status1[port] = warp17_call('GetTestStatus',
-                                            TestCaseArg(tca_eth_port=port,
-                                                        tca_test_case_id=0))
-                stats1[port] = warp17_call('GetStatistics',
-                                           TestCaseArg(tca_eth_port=port,
-                                                       tca_test_case_id=0))
-            tstamp_diff = time.time() - init_tstamp
-            status.append(status1)
-            stats.append(stats1)
-            tstamps.append(tstamp_diff)
-            time.sleep(0.5)
-            sample += 1
-
-        for test in test_list:
-            test.stop()
-
-        warp17_stop(localenv, proc)
-        i = 0
-
-        while i < len(stats):
-            stats1 = stats[i]
-            status1 = status[i]
-            tstamps1 = tstamps[i]
-            message = "timestamp={:.2f},".format(tstamps1)
-            for port in (0, 1):
-                phystats = stats1[port].sr_phy_rate
-                statusstats = status1[port].tsr_stats
-                link_speed_bytes = float(
-                    phystats.pys_link_speed) * 1000 * 1000 / 8
-
-                tx_usage = min(
-                    float(phystats.pys_tx_bytes) * 100 / link_speed_bytes,
-                    100.0)
-                rx_usage = min(
-                    float(phystats.pys_rx_bytes) * 100 / link_speed_bytes,
-                    100.0)
-                message += "port={},".format(port)
-                message += "rx_usage={:.2f},".format(rx_usage)
-                message += "tx_usage={:.2f},".format(tx_usage)
-                message += "gs_estab={},".format(statusstats.gs_estab)
-            message += "\n"
-            logwriter.write(message)
-            i += 1
-
     except BaseException as E:
-        print("Error occurred: {}".format(E))
+        print("ERROR {} starting warp17".format(E))
 
-    return
+    n_samples = 20
+    sample = 0
+    status = []
+    stats = []
+    tstamps = []
+    for test in test_list:
+        test.add_config()
+        # test.check_test()  # use to debug only
+        # ATTENTION dirty hack to make this class working with a single test
+        #  configured, TODO it has to be cleaned
+        test.start(0)
 
+    sleep(60)  # wait for test to be fully running
+    #     (http tests take a lot of time)
+    init_tstamp = time.time()
+    while sample <= n_samples:
+        status1 = {}
+        stats1 = {}
+        for port in (0, 1):
+            status1[port] = warp17_call('GetTestStatus',
+                                        TestCaseArg(tca_eth_port=port,
+                                                    tca_test_case_id=0))
+            stats1[port] = warp17_call('GetStatistics',
+                                       TestCaseArg(tca_eth_port=port,
+                                                   tca_test_case_id=0))
+        tstamp_diff = time.time() - init_tstamp
+        status.append(status1)
+        stats.append(stats1)
+        tstamps.append(tstamp_diff)
+        time.sleep(0.5)
+        sample += 1
+
+    for test in test_list:
+        test.stop()
+
+    warp17_stop(localenv, proc)
+    i = 0
+
+    while i < len(stats):
+        stats1 = stats[i]
+        status1 = status[i]
+        tstamps1 = tstamps[i]
+        message = "timestamp={:.2f},".format(tstamps1)
+        for port in (0, 1):
+            phystats = stats1[port].sr_phy_rate
+            statusstats = status1[port].tsr_stats
+            link_speed_bytes = float(
+                phystats.pys_link_speed) * 1000 * 1000 / 8
+
+            tx_usage = min(
+                float(phystats.pys_tx_bytes) * 100 / link_speed_bytes,
+                100.0)
+            rx_usage = min(
+                float(phystats.pys_rx_bytes) * 100 / link_speed_bytes,
+                100.0)
+            message += "port={},".format(port)
+            message += "rx_usage={:.2f},".format(rx_usage)
+            message += "tx_usage={:.2f},".format(tx_usage)
+            message += "gs_estab={},".format(statusstats.gs_estab)
+        message += "\n"
+        logwriter.write(message)
+        i += 1
 
 def test_http_throughput():
     """Configures a test to run 10 million sessions"""
