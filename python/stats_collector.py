@@ -90,6 +90,8 @@ warp17_call = partial(warp17_method_call, env.get_host_name(),
 bin = "{}/build/warp17".format(local_dir)
 
 
+active_ports = 0
+
 # TODO: instead of having a test class with server/client testcases preset
 #  we should have a testcase class with one generic testcase and eventually a
 #  secondary class with two default testcases server/client
@@ -98,14 +100,17 @@ class Test():
     def __init__(self, type=None, port=None, id=None):
         # l3_config = {
         #     port : [
-        #         def_gw,
-        #         n_ip]
+        #         start_ip,
+        #         n_ip,
+        #         def_gw]
         # }
         self.l3_config = {
             0: [0,
-                1],
+                1,
+                0],
             1: [0,
-                1]
+                1,
+                0]
         }
         # self.l4_config = {
         #     port: n_ports
@@ -120,6 +125,7 @@ class Test():
             self.rate_ccfg = RateClient(rc_open_rate=Rate(),
                                         rc_close_rate=Rate(),
                                         rc_send_rate=Rate())
+            self.cl_test_criteria = None
             self.app_ccfg = App()
 
             self.l4_ccfg = L4Client()
@@ -166,23 +172,38 @@ class Test():
         else:
             raise BaseException("ERROR: Wrong test type.")
 
-    def add_l3(self, port, def_gw, n_ip):
-        self.l3_config[port] = [def_gw, n_ip]
+    def add_l3(self, port, starting_ip, n_ip, def_gw):
+        if self.l3_config is None or self.l3_config[port] is None:
+            raise BaseException("ERROR: port not configured")
+        else:
+            self.l3_config[port] = [starting_ip, n_ip, def_gw]
 
     def add_config(self):
         # TODO: enable multiple server/client tests
         if self.test_type is TestCaseType.Value('CLIENT'):
 
-            def_gw, n_ip = self.l3_config[self.cl_port]
-            pcfg = b2b_port_add(self.cl_port,
-                                def_gw=Ip(ip_version=IPV4, ip_v4=def_gw))
-            b2b_port_add_intfs(pcfg,
-                               [(Ip(ip_version=IPV4,
-                                    ip_v4=b2b_ipv4(self.cl_port, i)),
-                                 Ip(ip_version=IPV4,
-                                    ip_v4=b2b_mask(self.cl_port, i)),
-                                 b2b_count(self.cl_port, i)) for i in
-                                range(0, 1)])
+            first_ip, n_ip, def_gw = self.l3_config[self.cl_port]
+            cl_first_ip = Ip(ip_version=IPV4, ip_v4=first_ip)
+            cl_def_gw = Ip(ip_version=IPV4, ip_v4=def_gw)
+
+            cl_src_ips = IpRange(ipr_start=cl_first_ip,
+                                 ipr_end=Ip(ip_version=IPV4, ip_v4=(first_ip
+                                                                    + n_ip - 1)))
+
+            first_ip, n_ip, def_gw = self.l3_config[self.sr_port]
+            srv_first_ip = Ip(ip_version=IPV4, ip_v4=first_ip)
+
+            cl_dst_ips = IpRange(ipr_start=srv_first_ip,
+                                 ipr_end=Ip(ip_version=IPV4, ip_v4=(first_ip
+                                                                    + n_ip - 1)))
+
+            pcfg = b2b_port_add(self.cl_port, def_gw=cl_def_gw)
+
+            intf_cfg_list = [(cl_first_ip,
+                             Ip(ip_version=IPV4, ip_v4=b2b_mask(self.cl_port, 0)),
+                             b2b_count(self.cl_port, 0))]
+
+            b2b_port_add_intfs(pcfg, intf_cfg_list)
             warp17_call('ConfigurePort', pcfg)
 
             self.l4_ccfg = L4Client(l4c_proto=self.proto,
@@ -191,8 +212,6 @@ class Test():
                                             self.l4_config[self.cl_port]),
                                         tuc_dports=b2b_ports(
                                             self.l4_config[self.sr_port])))
-            cl_src_ips = b2b_sips(self.cl_port, self.l3_config[self.cl_port][1])
-            cl_dst_ips = b2b_sips(self.sr_port, self.l3_config[self.sr_port][1])
             self.ccfg = TestCase(tc_type=CLIENT, tc_eth_port=self.cl_port,
                                  tc_id=self.tc_id,
                                  tc_client=Client(cl_src_ips=cl_src_ips,
@@ -207,23 +226,26 @@ class Test():
                                  tc_async=True)
             self.configure_tc(self.ccfg, self.cl_port)
         elif self.test_type is TestCaseType.Value('SERVER'):
+            first_ip, n_ip, def_gw = self.l3_config[self.sr_port]
 
-            def_gw, n_ip = self.l3_config[self.sr_port]
-            pcfg = b2b_port_add(self.sr_port,
-                                def_gw=Ip(ip_version=IPV4, ip_v4=def_gw))
-            b2b_port_add_intfs(pcfg,
-                               [(Ip(ip_version=IPV4,
-                                    ip_v4=b2b_ipv4(self.sr_port, i)),
-                                 Ip(ip_version=IPV4,
-                                    ip_v4=b2b_mask(self.sr_port, i)),
-                                 b2b_count(self.sr_port, i)) for i in
-                                range(0, 1)])
+            srv_first_ip = Ip(ip_version=IPV4, ip_v4=first_ip)
+            srv_def_gw = Ip(ip_version=IPV4, ip_v4=def_gw)
+
+            pcfg = b2b_port_add(self.sr_port, def_gw=srv_def_gw)
+
+            intf_cfg_list = [(srv_first_ip,
+                             Ip(ip_version=IPV4, ip_v4=b2b_mask(self.sr_port, 0)),
+                             b2b_count(self.sr_port, 0))]
+
+            b2b_port_add_intfs(pcfg, intf_cfg_list)
             warp17_call('ConfigurePort', pcfg)
             self.l4_scfg = L4Server(l4s_proto=self.proto,
                                     l4s_tcp_udp=TcpUdpServer(
-                                        tus_ports=b2b_ports(1)))
-            srv_src_ips = b2b_sips(self.sr_port,
-                                   self.l3_config[self.sr_port][1])
+                                        tus_ports=b2b_ports(
+                                            self.l4_config[self.sr_port])))
+            srv_src_ips = IpRange(ipr_start=srv_first_ip,
+                                  ipr_end=Ip(ip_version=IPV4, ip_v4=(first_ip +
+                                                                     n_ip - 1)))
             self.scfg = TestCase(tc_type=SERVER, tc_eth_port=self.sr_port,
                                  tc_id=self.tc_id,
                                  tc_server=Server(srv_ips=srv_src_ips,
@@ -327,15 +349,8 @@ class Test():
     @staticmethod
     def configure_tc(cfg, port):
         answer = warp17_call('ConfigureTestCase', cfg)
-        if answer.e_code == -long(errno.EALREADY) or answer.e_code == \
-                -long(errno.EEXIST):
-            # print("ERROR {}: trying to reconfigure".format(answer.e_code))
-            # TODO: clean all the possible testcases
-            warp17_call('PortStop', PortArg(pa_eth_port=port))
-            warp17_call('DelTestCase', cfg)
-            answer = warp17_call('ConfigureTestCase', cfg)
-        if answer.e_code is not 0:
-            pdb.set_trace()
+        if answer.e_code != -long(errno.EALREADY) and answer.e_code != -long(
+                errno.EEXIST) and answer.e_code != 0:
             raise BaseException("ERROR {} configuring testcase"
                                 "".format(answer.e_code))
 
@@ -364,11 +379,18 @@ class Test():
 
         return status, stats, tstamps
 
-    def stop(self):
-        for port in self.l3_config:
+    def stop(self, port=None):
+        if port is not None and type(port) is int:
             answer = warp17_call('PortStop', PortArg(pa_eth_port=port))
-            if answer.e_code is not 0:
-                print("ERROR {} stopping testcases on port {}".format(answer.e_code, port))
+            if answer.e_code is not 0 and answer.e_code is not -long(errno.EALREADY):
+                raise BaseException("ERROR {} stopping testcases on port {}"
+                                    "".format(answer.e_code, port))
+        else:
+            for port in self.l3_config:
+                answer = warp17_call('PortStop', PortArg(pa_eth_port=port))
+                if answer.e_code is not 0 and answer.e_code is not -long(errno.EALREADY):
+                    raise BaseException("ERROR {} stopping testcases on port {}"
+                                        "".format(answer.e_code, port))
 
     # DEBUG function that tries to get the testcase and prints it
     #   ATTENTION: use it only after you configured the testcases
@@ -468,29 +490,30 @@ def collect_stats(logwriter, localenv, test_list):
         print("ERROR {} starting warp17".format(E))
         warp17_stop(localenv, proc)
 
-        n_samples = 20
-        sample = 0
-        status = []
-        stats = []
-        tstamps = []
-        for test in test_list:
-            test.add_config()
-            # test.check_test()  # use to debug only
-            test.start()
+    n_samples = 20
+    sample = 0
+    status = []
+    stats = []
+    tstamps = []
+    for test in test_list:
+        test.add_config()
+        # test.check_test()  # use to debug only
+        test.start(active_ports)
 
-        sleep(15)   # wait for test to be fully running
-                    #  (http tests take a lot of time)
-        init_tstamp = time.time()
-        while sample <= n_samples:
+    sleep(60)  # wait for test to be fully running
+    #     (http tests take a lot of time)
+    init_tstamp = time.time()
+    while sample <= n_samples:
+        for test in test_list:
             status1 = {}
             stats1 = {}
-            for port in (0, 1):
+            for port in test.l3_config:
                 status1[port] = warp17_call('GetTestStatus',
                                             TestCaseArg(tca_eth_port=port,
-                                                        tca_test_case_id=0))
+                                                        tca_test_case_id=test.tc_id))
                 stats1[port] = warp17_call('GetStatistics',
                                            TestCaseArg(tca_eth_port=port,
-                                                       tca_test_case_id=0))
+                                                       tca_test_case_id=test.tc_id))
             tstamp_diff = time.time() - init_tstamp
             status.append(status1)
             stats.append(stats1)
@@ -498,18 +521,20 @@ def collect_stats(logwriter, localenv, test_list):
             time.sleep(0.5)
             sample += 1
 
+    for test in test_list:
+        test.stop(active_ports)
+
+    warp17_stop(localenv, proc)
+    i = 0
+
+    while i < len(stats):
+        stats1 = stats[i]
+        status1 = status[i]
+        tstamps1 = tstamps[i]
+        message = "timestamp={:.2f},".format(tstamps1)
+
         for test in test_list:
-            test.stop()
-
-        warp17_stop(localenv, proc)
-        i = 0
-
-        while i < len(stats):
-            stats1 = stats[i]
-            status1 = status[i]
-            tstamps1 = tstamps[i]
-            message = "timestamp={:.2f},".format(tstamps1)
-            for port in (0, 1):
+            for port in [active_ports]:
                 phystats = stats1[port].sr_phy_rate
                 statusstats = status1[port].tsr_stats
                 link_speed_bytes = float(phystats.pys_link_speed) * 1000 * 1000 / 8
@@ -520,9 +545,9 @@ def collect_stats(logwriter, localenv, test_list):
                 message += "rx_usage={:.2f},".format(rx_usage)
                 message += "tx_usage={:.2f},".format(tx_usage)
                 message += "gs_estab={},".format(statusstats.gs_estab)
-            message += "\n"
-            logwriter.write(message)
-            i += 1
+        message += "\n"
+        logwriter.write(message)
+        i += 1
 
 
     return
@@ -547,32 +572,33 @@ def wait_collect_stats(logwriter, localenv, test_list):
         # test.check_test()  # use to debug only
         # ATTENTION dirty hack to make this class working with a single test
         #  configured, TODO it has to be cleaned
-        test.start(0)
+        test.start(active_ports)
 
     sleep(60)  # wait for test to be fully running
     #     (http tests take a lot of time)
     init_tstamp = time.time()
     while sample <= n_samples:
-        status1 = {}
-        stats1 = {}
-        for port in (0, 1):
-            status1[port] = warp17_call('GetTestStatus',
-                                        TestCaseArg(tca_eth_port=port,
-                                                    tca_test_case_id=0))
-            stats1[port] = warp17_call('GetStatistics',
-                                       TestCaseArg(tca_eth_port=port,
-                                                   tca_test_case_id=0))
-        tstamp_diff = time.time() - init_tstamp
-        status.append(status1)
-        stats.append(stats1)
-        tstamps.append(tstamp_diff)
-        time.sleep(0.5)
-        sample += 1
+        for test in test_list:
+            status1 = {}
+            stats1 = {}
+            # ATTENTION: hack to fix
+            for port in [active_ports]:
+                status1[port] = warp17_call('GetTestStatus',
+                                            TestCaseArg(tca_eth_port=port,
+                                                        tca_test_case_id=test.tc_id))
+                stats1[port] = warp17_call('GetStatistics',
+                                           TestCaseArg(tca_eth_port=port,
+                                                       tca_test_case_id=test.tc_id))
+            tstamp_diff = time.time() - init_tstamp
+            status.append(status1)
+            stats.append(stats1)
+            tstamps.append(tstamp_diff)
+            time.sleep(0.5)
+            sample += 1
 
     for test in test_list:
-        test.stop()
+        test.stop(active_ports)
 
-    warp17_stop(localenv, proc)
     i = 0
 
     while i < len(stats):
@@ -580,25 +606,24 @@ def wait_collect_stats(logwriter, localenv, test_list):
         status1 = status[i]
         tstamps1 = tstamps[i]
         message = "timestamp={:.2f},".format(tstamps1)
-        for port in (0, 1):
-            phystats = stats1[port].sr_phy_rate
-            statusstats = status1[port].tsr_stats
-            link_speed_bytes = float(
-                phystats.pys_link_speed) * 1000 * 1000 / 8
+        for test in test_list:
+            for port in [active_ports]:
+                phystats = stats1[port].sr_phy_rate
+                statusstats = status1[port].tsr_stats
+                link_speed_bytes = float(phystats.pys_link_speed) * 1000 * 1000 / 8
 
-            tx_usage = min(
-                float(phystats.pys_tx_bytes) * 100 / link_speed_bytes,
-                100.0)
-            rx_usage = min(
-                float(phystats.pys_rx_bytes) * 100 / link_speed_bytes,
-                100.0)
-            message += "port={},".format(port)
-            message += "rx_usage={:.2f},".format(rx_usage)
-            message += "tx_usage={:.2f},".format(tx_usage)
-            message += "gs_estab={},".format(statusstats.gs_estab)
+                tx_usage = min(
+                    float(phystats.pys_tx_bytes) * 100 / link_speed_bytes, 100.0)
+                rx_usage = min(
+                    float(phystats.pys_rx_bytes) * 100 / link_speed_bytes, 100.0)
+                message += "port={},".format(port)
+                message += "rx_usage={:.2f},".format(rx_usage)
+                message += "tx_usage={:.2f},".format(tx_usage)
+                message += "gs_estab={},".format(statusstats.gs_estab)
         message += "\n"
         logwriter.write(message)
         i += 1
+
 
 def test_http_throughput():
     """Configures a test to run 10 million sessions"""
@@ -606,8 +631,8 @@ def test_http_throughput():
     test_10m = Test()
     test_10m.cl_port = 0
     test_10m.sr_port = 1
-    test_10m.add_l3(test_10m.cl_port, 167837697, 2)
-    test_10m.add_l3(test_10m.sr_port, 167772161, 1)
+    test_10m.add_l3(test_10m.cl_port, 167837697, 2, 167772161)
+    test_10m.add_l3(test_10m.sr_port, 167772161, 1, 167837697)
     test_10m.l4_config[test_10m.cl_port] = 200
     test_10m.l4_config[test_10m.sr_port] = 50000
     test_10m.proto = TCP
@@ -640,8 +665,8 @@ def test_udp_throughput():
     test_thr = Test(id=0)
     test_thr.cl_port = 0
     test_thr.sr_port = 1
-    test_thr.add_l3(test_thr.cl_port, 167837697, 1)  # 10.1.0.1
-    test_thr.add_l3(test_thr.sr_port, 167772161, 10)  # 10.0.0.1-10.0.0.10
+    test_thr.add_l3(test_thr.cl_port, 167837697, 1, 167772161)  # 10.1.0.1
+    test_thr.add_l3(test_thr.sr_port, 167772161, 10, 167837697)  # 10.0.0.1-10.0.0.10
     test_thr.l4_config[test_thr.cl_port] = 10
     test_thr.l4_config[test_thr.sr_port] = 50000  # not really needed
     test_thr.proto = UDP
@@ -663,8 +688,8 @@ def test_udp_throughput():
     test_thr2 = Test(id=1)
     test_thr2.cl_port = 1
     test_thr2.sr_port = 0
-    test_thr2.add_l3(test_thr2.cl_port, 167837697, 1)  # 10.1.0.1
-    test_thr2.add_l3(test_thr2.sr_port, 167772161, 10)  # 10.0.0.1-10.0.0.10
+    test_thr2.add_l3(test_thr2.cl_port, 0, 1, 167837697)  # 10.1.0.1
+    test_thr2.add_l3(test_thr2.sr_port, 0, 10, 167772161)  # 10.0.0.1-10.0.0.10
     test_thr2.l4_config[test_thr2.cl_port] = 10
     test_thr2.l4_config[test_thr2.sr_port] = 50000  # not really needed
     test_thr2.proto = UDP
@@ -699,8 +724,8 @@ def test_tcp_throughput():
     test_thr = Test()
     test_thr.cl_port = 0
     test_thr.sr_port = 1
-    test_thr.add_l3(test_thr.cl_port, 167837697, 4)  # 10.1.0.1
-    test_thr.add_l3(test_thr.sr_port, 167772161, 1)  # 10.0.0.1-10.0.0.10
+    test_thr.add_l3(test_thr.cl_port, 167837697, 4, 167772161)  # 10.1.0.1
+    test_thr.add_l3(test_thr.sr_port, 167772161, 1, 167837697)  # 10.0.0.1-10.0.0.10
     test_thr.l4_config[test_thr.cl_port] = 200
     test_thr.l4_config[test_thr.sr_port] = 50000  # not really needed
     test_thr.proto = TCP
@@ -735,8 +760,8 @@ def test_tcp2_throughput():
     test_thr = Test()
     test_thr.cl_port = 0
     test_thr.sr_port = 1
-    test_thr.add_l3(test_thr.cl_port, 167837697, 4)  # 10.1.0.1
-    test_thr.add_l3(test_thr.sr_port, 167772161, 1)  # 10.0.0.1-10.0.0.10
+    test_thr.add_l3(test_thr.cl_port, 167837697, 4, 167772161)  # 10.1.0.1
+    test_thr.add_l3(test_thr.sr_port, 167772161, 1, 167837697)  # 10.0.0.1-10.0.0.10
     test_thr.l4_config[test_thr.cl_port] = 200
     test_thr.l4_config[test_thr.sr_port] = 50000  # not really needed
     test_thr.proto = TCP
@@ -771,8 +796,8 @@ def test_tcp3_throughput():
     test_thr = Test()
     test_thr.cl_port = 0
     test_thr.sr_port = 1
-    test_thr.add_l3(test_thr.cl_port, 167837697, 4)  # 10.1.0.1
-    test_thr.add_l3(test_thr.sr_port, 167772161, 1)  # 10.0.0.1-10.0.0.10
+    test_thr.add_l3(test_thr.cl_port, 167837697, 4, 167772161)  # 10.1.0.1
+    test_thr.add_l3(test_thr.sr_port, 167772161, 1, 167837697)  # 10.0.0.1-10.0.0.10
     test_thr.l4_config[test_thr.cl_port] = 200
     test_thr.l4_config[test_thr.sr_port] = 50000  # not really needed
     test_thr.proto = TCP
@@ -809,8 +834,8 @@ def test_tcp4_throughput():
     test_thr = Test()
     test_thr.cl_port = 0
     test_thr.sr_port = 1
-    test_thr.add_l3(test_thr.cl_port, 167837697, 4)  # 10.1.0.1
-    test_thr.add_l3(test_thr.sr_port, 167772161, 1)  # 10.0.0.1-10.0.0.10
+    test_thr.add_l3(test_thr.cl_port, 167837697, 4, 167772161)  # 10.1.0.1
+    test_thr.add_l3(test_thr.sr_port, 167772161, 1, 167837697)  # 10.0.0.1-10.0.0.10
     test_thr.l4_config[test_thr.cl_port] = 200
     test_thr.l4_config[test_thr.sr_port] = 50000  # not really needed
     test_thr.proto = TCP
@@ -848,8 +873,8 @@ def test_single_udp_throughput():
     test_thr = Test()
     test_thr.cl_port = 0
     test_thr.sr_port = 1
-    test_thr.add_l3(test_thr.cl_port, 167837697, 1)  # 10.1.0.1
-    test_thr.add_l3(test_thr.sr_port, 167772161, 15)  # 10.0.0.1-10.0.0.15
+    test_thr.add_l3(test_thr.cl_port, 167837697, 1, 167772161)  # 10.1.0.1
+    test_thr.add_l3(test_thr.sr_port, 167772161, 15, 167837697)  # 10.0.0.1-10.0.0.15
     test_thr.l4_config[test_thr.cl_port] = 15
     test_thr.l4_config[test_thr.sr_port] = 50000  # not really needed
     test_thr.proto = UDP
@@ -882,9 +907,8 @@ def test_throughput2():
     test_thr_cl1 = Test(type=TestCaseType.Value('CLIENT'), port=0, id=0)
     test_thr_cl1.cl_port = 0
     test_thr_cl1.sr_port = 1
-    test_thr_cl1.add_l3(test_thr_cl1.cl_port, 167837697, 1)  # 10.1.0.1
-    test_thr_cl1.add_l3(test_thr_cl1.sr_port, 167772161,
-                        10)  # 10.0.0.1-10.0.0.10
+    test_thr_cl1.add_l3(test_thr_cl1.cl_port, 167837697, 1, 167772161)  # 10.1.0.1
+    test_thr_cl1.add_l3(test_thr_cl1.sr_port, 167772161, 10, 167837697)  # 10.0.0.1-10.0.0.10
     test_thr_cl1.l4_config[test_thr_cl1.cl_port] = 10
     test_thr_cl1.l4_config[test_thr_cl1.sr_port] = 50000  # not really needed
     test_thr_cl1.proto = UDP
@@ -904,8 +928,9 @@ def test_throughput2():
                         id=0)
     test_thr_cl2.cl_port = 1
     test_thr_cl2.sr_port = 0
-    test_thr_cl2.add_l3(test_thr_cl2.cl_port, 167837697, 1)  # 10.1.0.1
-    test_thr_cl2.add_l3(test_thr_cl2.sr_port, 167772161, 10)  # 10.0.0.1-10.0.0.10
+    test_thr_cl2.add_l3(test_thr_cl2.cl_port, 0, 1, 167837697)  # 10.1.0.1
+    test_thr_cl2.add_l3(test_thr_cl2.sr_port, 0, 10,
+                        167772161)  # 10.0.0.1-10.0.0.10
     test_thr_cl2.l4_config[test_thr_cl2.cl_port] = 10
     test_thr_cl2.l4_config[test_thr_cl2.sr_port] = 50000  # not really needed
     test_thr_cl2.proto = UDP
@@ -939,8 +964,8 @@ def test_tcp_single_client():
     test_thr_cl = Test(type=TestCaseType.Value('CLIENT'), port=0, id=0)
     test_thr_cl.cl_port = 0
     test_thr_cl.sr_port = 1
-    test_thr_cl.add_l3(test_thr_cl.cl_port, 167837697, 4)  # 10.1.0.1
-    test_thr_cl.add_l3(test_thr_cl.sr_port, 167772161, 1)  # 10.0.0.1-10.0.0.10
+    test_thr_cl.add_l3(test_thr_cl.cl_port, 167772161, 4, 335544321)
+    test_thr_cl.add_l3(test_thr_cl.sr_port, 335544321, 1, 335544321)
     test_thr_cl.l4_config[test_thr_cl.cl_port] = 200
     test_thr_cl.l4_config[test_thr_cl.sr_port] = 50000  # not really needed
     test_thr_cl.proto = TCP
@@ -974,8 +999,8 @@ def test_tcp_single_server():
 
     test_thr_srv = Test(type=TestCaseType.Value('SERVER'), port=0, id=0)
     test_thr_srv.sr_port = 0
-    test_thr_srv.add_l3(test_thr_srv.sr_port, 167772161, 1)
-    test_thr_srv.l4_config[test_thr_srv.sr_port] = 50000  # not really needed
+    test_thr_srv.add_l3(test_thr_srv.sr_port, 335544321, 1, 167772161)
+    test_thr_srv.l4_config[test_thr_srv.sr_port] = 50000
     test_thr_srv.proto = TCP
     test_thr_srv.mtu = 2854
     test_thr_srv.tcpwin = 2560
